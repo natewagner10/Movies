@@ -1,0 +1,144 @@
+---
+title: "MovieSetsProject"
+author: "Dominic Ventura"
+date: "11/15/2019"
+output: html_document
+---
+
+
+Load packages:
+```{r}
+setwd("/Users/dominicventura/Data Munging/Movies")
+
+install.packages("gt")
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(jsonlite)
+library(gt)
+library(data.table)
+```
+
+
+Read data:
+```{r}
+movies <- read_csv("movies_metadata.csv")
+credits <- read_csv("credits.csv")
+keywords <- read_csv("keywords.csv")
+links <- read_csv("links.csv")
+ratings <- read_csv("ratings.csv")
+```
+
+
+Check NAs:
+```{r}
+str(movies)
+sum.NA.total <- movies %>%
+  select(everything()) %>%
+  summarise_all(funs(sum(is.na(.))))
+PropOfNA.total <- (sum.NA.total/nrow(movies))*100
+SumNA.prop <- PropOfNA.total %>% map_dbl(sum)
+kable(SumNA.prop, format = "markdown")
+```
+
+
+# EDA
+```{r}
+# freq table for # movies per year:
+movies_byYear <- movies %>% 
+  group_by(year(release_date)) %>% 
+  count()
+# barplot of # movies per year:
+ggplot(movies_byYear, aes(`year(release_date)`, n)) + geom_bar(stat="identity", width = 0.5)
+# set movies with budget 0 to NA
+movies$budget[movies$budget == 0] <- NA 
+summary(movies$budget)
+```
+
+
+
+# to unpack genres column:
+```{r}
+metadata <- fread("movies_metadata.csv", select=c('adult', 'genres', 'release_date', 'original_language', 'original_title', 'id', 'imdb_id'), fill=T)
+
+metadata <- metadata[!is.na(as.integer(id))]
+metadata <- metadata[, genre := gsub("\'","\"", metadata$genre)]
+
+metadata[, c('original_language', 'adult', "imdb_id") := NULL]
+
+genres <- metadata[, unlist(lapply(genre, fromJSON), recursive=F)['name'], by=id]
+sorted.genres <- genres[, .N, by=name][order(-N)]
+sorted.genres[1:20]
+genres[, dummy := 1]
+encoded.genres <- dcast(na.omit(genres[,.SD[1:3], by=id])[name %in% sorted.genres[1:20, name]], 
+                        id ~  name, value.var='dummy', fill=0)
+data.w.genre <- merge(encoded.genres,
+      metadata[, .(id, original_title, release_date)], 
+      all.x=T, by="id")
+```
+
+
+```{r}
+#install.packages("tm")  # for text mining
+#install.packages("SnowballC") # for text stemming
+#install.packages("wordcloud") # word-cloud generator 
+#install.packages("RColorBrewer") # color palettes
+# install.packages(c("tm", "SnowballC", "wordcloud", "RColorBrewer", "RCurl", "XML"))
+
+
+library("tm")
+library("SnowballC")
+library("wordcloud")
+library("RColorBrewer")
+
+
+
+keywordsDS <- data.frame(keywords)
+
+# Create the corpus of data
+keywordsDS.corpus <- Corpus(VectorSource(keywordsDS$keywords))
+
+# Cleaning dat. This includes removing stopwords, numbers, whitespace, etc. and converting the corpus into a plain text document.
+
+keywordsDS.Clean <-tm_map(keywordsDS.corpus, PlainTextDocument)
+keywordsDS.Clean<-tm_map(keywordsDS.corpus,tolower)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeNumbers)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeWords, stopwords("english"))
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeWords, c("name"))
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removePunctuation)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,stripWhitespace)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,stemDocument)
+
+wordcloud(words = keywordsDS.Clean, min.freq = 1,
+          max.words=100, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+# Build a term-document matrix. Document matrix is a table containing the frequency of the words. Column names are words and row names are documents.
+dtm <- TermDocumentMatrix(keywordsDS.Clean)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+head(d, 10)
+
+# Analyze the association between frequent terms (i.e., terms which correlate)
+findAssocs(dtm, terms = "love", corlimit = 0.3)
+findAssocs(dtm, terms = "music", corlimit = 0.3)
+findAssocs(dtm, terms = "war", corlimit = 0.3)
+findAssocs(dtm, terms = "world", corlimit = 0.3)
+
+# The frequency of the first 10 frequent words plotted
+barplot(d[1:20,]$freq, 
+        las = 2, 
+        names.arg = d[1:20,]$word,
+        col ="lightyellow", 
+        main ="Most frequent words",
+        ylab = "Word frequencies")
+
+
+
+```
+
+
+
+
+
