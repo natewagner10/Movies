@@ -1,0 +1,232 @@
+---
+title: "Munging Movies"
+
+date: "11/15/2019"
+output: html_document
+---
+
+# MICHAEL NEW CODE FROM HERE*****************
+
+
+
+# loading libraries
+```{r}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+```
+
+
+
+# ORIGINAL METADATA
+
+## original metadata with some dictionary form columns
+```{r}
+metadata <- read_csv("the-movies-dataset/movies_metadata.csv")
+```
+
+## show proportion of missing values in each column
+```{r}
+na.prop2 <- apply(metadata,2,function(x) sum(is.na(x)/length(x)))
+signif(na.prop2,4)
+
+```
+
+# revenue over 100M over time
+
+```{r}
+nona <- metadata %>% filter(metadata$revenue>100000000) 
+plot(nona$revenue ~ nona$release_date)
+#plot(metadata$revenue ~ metadata$release_date)
+```
+
+
+
+
+# SCRUBBED DATA CONTAINING $ INFORMATION
+
+
+# Using a scrubbed version of the metadata with nonzero $ info,converting to dataframe, and attaching
+```{r}
+metascrub <- read_csv("the-movies-dataset/MetaScrubbedMoney.csv")
+metascrubdf <- as.data.frame(metascrub)
+attach(metascrubdf)
+```
+
+
+# CHECKING DATA STRUCTURE
+
+## Viewing head structure of dataframe
+```{r}
+head(metascrubdf)
+```
+
+## summary information
+```{r}
+summary(metascrubdf)
+```
+
+## show proportion of missing values in each column
+```{r}
+na.prop <- apply(metascrubdf,2,function(x) sum(is.na(x)/length(x)))
+na.prop
+
+```
+
+
+# MONETARY ANALYSIS
+
+
+## Average budget, revenue, and profit
+```{r}
+sapply(metascrubdf[,c(4,5,6)],mean)
+```
+
+
+
+
+## correlations
+```{r}
+cor(metascrubdf[,c(3:6,8)])
+```
+
+
+# REVENUE VS BUDGET
+
+
+## revenue vs. budget
+Correlation is .721892
+```{r}
+plot(revenueM ~ budgetM, data=metascrubdf)
+cor(revenueM,budgetM)
+```
+
+# 2 main outliers
+```{r}
+maxb <- which.max((budgetM))
+metascrubdf[maxb,c(1,4,5)]
+```
+
+```{r}
+maxp <- which.max(profitM)
+metascrubdf[maxp,c(1,4,5)]
+```
+
+Outliers:
+  budget: Pirates of the Caribbean: On Stranger Tides
+  revenue: Avatar
+
+
+# Linear model for revenue vs. budget
+revenue = -3.34 + 3.02 (budget)
+Need to spend money to make money
+```{r}
+mdl <- (lm(revenueM ~ budgetM, data=metascrubdf))
+coef(mdl)
+
+```
+
+
+# PROFIT VS POPULARITY
+
+
+# profit vs popularity
+Correlation is .4274831
+Popularity is not highly correlated with profit
+```{r}
+plot(profitM ~ popularity, data=metascrubdf)
+cor(profitM,popularity)
+```
+Outliers:
+  popularity: Minions
+  profit: Avatar
+  
+  
+
+## Removing the top 6 outliers for profit vs popularity
+Slightly lower correlation.
+For the handful of highly popular movies between 100 and 250 poupularity, profit decreases with popularity.
+```{r}
+temp <- subset(metascrubdf, ((profitM<1500) & (popularity<250)))
+plot(profitM ~ popularity, data=temp)
+cor(temp$profitM,temp$popularity)
+
+```
+
+
+# GENRE PROFITABILITY
+
+
+## Profitability of genres
+Action, Adventure, Comedy, and Drama top the list.
+```{r}
+ggplot(data=metascrubdf, aes(x=maingenre, y=profitM)) + geom_col(aes(fill=maingenre))
+```
+
+## genre profitability list
+
+```{r}
+genprof <- aggregate(profitM ~ maingenre,metascrubdf,sum)
+genprof
+#plot(genprof$profitM,genprof$maingenre)
+```
+
+
+# PROFIT VS BUDGET
+
+
+## boxplots for profit quantiles without top 3 outliers
+Profit and profit variability increase with budget
+The top 10% budgeted movies have the most profit but also the most varibility
+```{r}
+dta <- subset(metascrubdf,profitM<1500)
+budget.break <- ntile(dta$budgetM,10)
+boxplot((profitM ~ budget.break),data = dta)
+
+```
+
+
+
+# RUNTIME INFORMATION
+
+## runtime information
+mean of 111 minutes with many outliers above the upper quartile
+```{r}
+boxplot(runtime)
+hist(runtime)
+mean(runtime)
+```
+
+
+
+# which genres of movies are most popular
+Popularity corresponds with profit above
+
+```{r}
+ggplot(data=metascrubdf, aes(x=maingenre, y=popularity/length(popularity))) + geom_col(aes(fill=maingenre))
+```
+
+
+## top 10 profitable collections
+```{r}
+
+coll2 <- metascrubdf %>% group_by(Collection)%>% summarize(profit = sum(profitM))
+coll2 <- as.data.frame(coll2)
+coll <- coll2[with(coll2,order(-coll2$profit)),] %>% filter(coll$profit<10000)
+head(coll,10)
+```
+
+```{r}
+scatter.smooth(coll$profit)
+```
+
+
+
+
+
+
+
+
+
