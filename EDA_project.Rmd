@@ -1,0 +1,506 @@
+---
+title: "EDA Project"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r eval=FALSE, include=FALSE}
+#setwd("/Users/natewagner/Documents/Data_munging_eda_project/the-movies-dataset")
+```
+
+
+
+```{r include=FALSE}
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(jsonlite)
+library(data.table)
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(knitr)
+library(gridExtra)
+#install.packages("gt")
+#install.packages("tm")
+#install.packages("wordcloud")
+#install.packages("RColorBrewer")
+```
+
+
+
+```{r include=FALSE}
+movies <- read_csv("movies_metadata.csv")
+credits <- read_csv("credits.csv")
+keywords <- read_csv("keywords.csv")
+links <- read_csv("links.csv")
+#ratings <- read_csv("the-movies-dataset/ratings.csv")
+metascrub <- read_csv("MetaScrubbedMoney.csv")
+metascrubdf <- as.data.frame(metascrub)
+```
+
+
+## Completeness
+
+Most of our variables of interest were basically all complete.
+```{r echo=FALSE}
+#str(movies)
+
+sum.NA.total <- movies %>%
+  select(everything()) %>%
+  summarise_all(funs(sum(is.na(.))))
+
+PropOfNA.total <- (sum.NA.total/nrow(movies))*100
+SumNA.prop <- PropOfNA.total %>% map_dbl(sum)
+kable(SumNA.prop, format = "markdown")
+
+```
+
+
+# Exploratory Data Analysis
+
+We have data on movies from 1874 to 2020. The number of movies per year clearly increases over time. 
+```{r echo=FALSE}
+# freq table for # movies per year:
+movies_byYear <- movies %>% 
+  group_by(year(release_date)) %>% 
+  count()
+
+# barplot of # movies per year:
+ggplot(movies_byYear, aes(`year(release_date)`, n)) + 
+  geom_bar(stat="identity", width = 0.5, fill = "tomato2") + 
+  labs(title = "Number of Movies per Year", x = "Year", y = "Number of Movies") + 
+  theme_classic()
+
+summary(year(movies$release_date))
+
+```
+
+
+### What affects movie ratings?
+
+There are a couple extreme outliers with average ratings of 0 and vote counts greater than 30. For simplicity and to get a better representation of our scatterplots we are going to exclude these two points. 
+```{r echo=FALSE}
+summary(movies$vote_average)
+summary(movies$vote_count)
+
+movies %>% filter(vote_average < .50 & vote_average > 0) %>% select(c(title, vote_average, vote_count))
+movies <- movies %>% filter(vote_average > 0.50)
+```
+
+
+Correlation Matrix
+```{r echo=FALSE}
+# select numeric columns & add year column:
+movies <- mutate(movies, year = year(movies$release_date))
+
+num.cols <- dplyr::select_if(movies, is.numeric)
+
+# compute cor from all numeric columns:
+cor.matrix <- round(cor(num.cols, use = "pairwise"), 2)
+
+# melt the cor matrix:
+cor.matrix.melt <- melt(cor.matrix)
+```
+
+
+Looking at the correlation matrix, there doesn't seem to be any real strong linear relationships between any of these variables and average movie ratings. But perhaps there are some non-linear relationships. 
+```{r fig2, fig.height = 15, fig.width = 20, fig.align = "center"}
+# plot cor matrix
+ggplot(data = cor.matrix.melt, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+kable(cor.matrix, format = "markdown")
+```
+
+
+
+```{r}
+one <- ggplot(movies %>% filter(popularity < 30), aes(popularity)) + geom_density(fill="gray30", alpha=0.4, adjust=0.05)
+
+two <- ggplot(movies %>% filter(vote_count < 100 & vote_count > 0), aes(vote_count)) + geom_density(fill="gray30", alpha=0.4, adjust=0.3)
+
+three <- ggplot(movies %>% filter(runtime < 140 & runtime > 0), aes(runtime)) + geom_density(fill="gray30", alpha = 0.4, adjust = 0.2)
+
+four <- ggplot(movies, aes(year(release_date))) + geom_density(fill="gray30", alpha=0.4, adjust = 0.2)
+
+grid.arrange(one, two, three, four, nrow = 2)
+```
+
+
+
+We are going to assume that to have an unbiased estimate of a movie's true average rating, there must be at least 30 votes, and we find 12,421 movies that meet this criteria. However, a potential source of bias with this approach is that it could be that movies with very low vote totals, are not very good movies to begin with and aren't popular. Thus, that could be why they have low vote counts and possible low average ratings.  
+```{r}
+movies %>% 
+  filter(vote_count >= 30) %>%
+  count()
+```
+
+
+###Are low vote counts associated with lower average ratings?
+
+It could be hard to see the actual trend with the extreme values of vote count.
+```{r}
+ggplot(movies %>% filter(vote_count > 0), aes(vote_count, vote_average)) +
+  geom_point(alpha = 0.05) + 
+  geom_smooth() + 
+  labs(title = "Vote Count vs Vote Average", x = "Vote Count", y = "Vote Average") +
+  theme_bw()
+```
+
+
+Even with removing the extreme values of vote count, it's still hard to see much of a releationship between vote count and vote average. 
+```{r}
+ggplot(movies %>% filter(vote_count > 0 & vote_count < 31), aes(vote_count, vote_average)) +
+  geom_point(alpha = 0.05) +
+  geom_smooth() +
+  labs(title = "Vote Count vs Vote Average", subtitle = "n < 31", x = "Vote Count", y = "Vote Average") +
+  theme_bw()
+```
+
+
+Remove movies with vote count less than 30
+```{r}
+movies <- movies %>% filter(vote_count >= 30)
+```
+
+
+### How has average vote changed over time?
+
+It seems there is a slight negative relationship between average vote and when the movie was released. 
+```{r}
+ggplot(movies, aes(year, vote_average)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth() +
+  labs(title = "Release Date vs Vote Average", x = "Year", y = "Vote Average") + 
+  theme_bw()
+```
+
+
+### How does the runtime of movie affect average votes?
+
+There are 69 movies with runtime equal to zero.
+```{r}
+summary(movies$runtime)
+
+movies %>%
+  filter(runtime == 0) %>%
+  count()
+```
+
+Hard to see association with the extreme values of runtime. 
+```{r}
+ggplot(movies %>% filter(runtime > 0), aes(runtime, vote_average)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth() +
+  labs(title = "Runtime vs Vote Average", x = "Runtime", y = "Vote Average") + 
+  theme_bw()
+```
+
+
+Even with the removal of runtime, it's still hard to see much of an association between runtime and average movie rating. 
+```{r}
+lower <- quantile(movies$runtime, 0.25, na.rm = TRUE) - 1.5 * IQR(movies$runtime, na.rm =T)
+upper <- quantile(movies$runtime, 0.75, na.rm = TRUE) + 1.5 * IQR(movies$runtime, na.rm =T)
+ggplot(movies %>% filter(runtime >= lower & runtime <= upper), aes(runtime, vote_average)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth() +
+  labs(title = "Runtime vs Vote Average", x = "Runtime", y = "Vote Average") +
+  theme_bw()
+```
+
+
+### Does average votes increase with popularity? 
+
+Not sure how popularity is measured.
+```{r}
+summary(movies$popularity)
+```
+
+Even with the removal of extreme outliers, there seems to be no relationship between movie popularity and average movie rating.
+```{r}
+lower <- quantile(movies$popularity, 0.25, na.rm = TRUE) - 1.5 * IQR(movies$popularity, na.rm =T)
+upper <- quantile(movies$popularity, 0.75, na.rm = TRUE) + 1.5 * IQR(movies$popularity, na.rm =T)
+
+ggplot(movies %>% filter(popularity >= lower & popularity < upper), aes(popularity, vote_average)) + geom_point(alpha = 0.1) +
+  geom_smooth() +
+  labs(title = "Popularity vs Vote Average", x = "Popularity", y = "Vote Average") +
+  theme_bw()
+```
+
+
+
+
+```{r eval=FALSE, include=FALSE}
+# Create the corpus of data
+keywordsDS.corpus <- Corpus(VectorSource(keywords$keywords))
+# Cleaning dat. This includes removing stopwords, numbers, whitespace, etc. and converting the corpus into a plain text document.
+keywordsDS.Clean <-tm_map(keywordsDS.corpus, PlainTextDocument)
+keywordsDS.Clean<-tm_map(keywordsDS.corpus,tolower)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeNumbers)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeWords, stopwords("english"))
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeWords, c("name"))
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,removePunctuation)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,stripWhitespace)
+keywordsDS.Clean <-tm_map(keywordsDS.Clean,stemDocument)
+wordcloud(words = keywordsDS.Clean, min.freq = 1,
+          max.words=100, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+
+```{r eval=FALSE, include=FALSE}
+
+
+# Build a term-document matrix. Document matrix is a table containing the frequency of the words. Column names are words and row names are documents.
+dtm <- TermDocumentMatrix(keywordsDS.Clean)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+head(d, 10)
+# Analyze the association between frequent terms (i.e., terms which correlate)
+findAssocs(dtm, terms = "love", corlimit = 0.3)
+findAssocs(dtm, terms = "music", corlimit = 0.3)
+findAssocs(dtm, terms = "war", corlimit = 0.3)
+findAssocs(dtm, terms = "world", corlimit = 0.3)
+# The frequency of the first 10 frequent words plotted
+barplot(d[1:20,]$freq, 
+        las = 2, 
+        names.arg = d[1:20,]$word,
+        col ="lightyellow", 
+        main ="Most frequent words",
+        ylab = "Word frequencies")
+
+## ggplot way 
+ggplot(d[1:20,], aes(word, freq)) + geom_bar(stat="identity", width = 0.5, fill = "navy", ) + theme(axis.text.x=element_text(angle=55, hjust=1)) + labs(title = "Most frequent words", y = "Word frequencies")
+
+
+```
+
+
+
+# MICHAEL NEW CODE FROM HERE*****************
+
+
+
+
+
+
+
+# revenue over 100M over time
+
+```{r}
+ggplot(movies %>% filter(revenue > 100000000), aes(release_date, revenue)) + geom_point()
+
+#plot(movies$revenue ~ movies$release_date)
+```
+
+
+```{r}
+lower <- quantile(movies$popularity, 0.25, na.rm = TRUE) - 1.5 * IQR(movies$popularity, na.rm =T)
+upper <- quantile(movies$popularity, 0.75, na.rm = TRUE) + 1.5 * IQR(movies$popularity, na.rm =T)
+
+ggplot(movies %>% filter(popularity >= lower & popularity < upper), aes(popularity, revenue)) + geom_point(alpha = 0.1) +
+  geom_smooth() +
+  labs(title = "Popularity vs Vote Average", x = "Popularity", y = "Revenue") +
+  theme_bw()
+```
+
+
+
+# SCRUBBED DATA CONTAINING $ INFORMATION
+
+
+# Using a scrubbed version of the metadata with nonzero $ info,converting to dataframe, and attaching
+
+
+# CHECKING DATA STRUCTURE
+
+## Viewing head structure of dataframe
+```{r}
+head(metascrubdf)
+```
+
+## summary information
+```{r}
+summary(metascrubdf)
+```
+
+## show proportion of missing values in each column
+```{r}
+na.prop <- apply(metascrubdf,2,function(x) sum(is.na(x)/length(x)))
+na.prop
+```
+
+
+# MONETARY ANALYSIS
+
+
+## Average budget, revenue, and profit
+```{r}
+sapply(metascrubdf[,c(4,5,6)],mean)
+```
+
+
+
+
+## correlations
+```{r}
+cor(metascrubdf[,c(3:6,8)])
+```
+
+
+# REVENUE VS BUDGET
+
+
+## revenue vs. budget
+Correlation is .721892
+```{r}
+#plot(revenueM ~ budgetM, data=metascrubdf)
+ggplot(metascrubdf, aes(budgetM, revenueM)) + geom_point(alpha = 0.3) + geom_smooth()
+cor(metascrubdf$revenueM, metascrubdf$budgetM)
+```
+
+# 2 main outliers
+```{r}
+maxb <- which.max((metascrubdf$budgetM))
+metascrubdf[maxb,c(1,4,5)]
+```
+
+```{r}
+maxp <- which.max(metascrubdf$profitM)
+metascrubdf[maxp,c(1,4,5)]
+```
+
+Outliers:
+  budget: Pirates of the Caribbean: On Stranger Tides
+  revenue: Avatar
+
+
+# Linear model for revenue vs. budget
+revenue = -3.34 + 3.02 (budget)
+Need to spend money to make money
+```{r}
+mdl <- (lm(revenueM ~ budgetM, data=metascrubdf))
+coef(mdl)
+```
+
+
+# PROFIT VS POPULARITY
+
+
+# profit vs popularity
+Correlation is .4274831
+Popularity is not highly correlated with profit
+```{r}
+plot(profitM ~ popularity, data=metascrubdf)
+cor(metascrubdf$profitM, metascrubdf$popularity)
+```
+Outliers:
+  popularity: Minions
+  profit: Avatar
+  
+  
+
+## Removing the top 6 outliers for profit vs popularity
+Slightly lower correlation.
+For the handful of highly popular movies between 100 and 250 poupularity, profit decreases with popularity.
+```{r}
+temp <- subset(metascrubdf, ((profitM<1500) & (popularity<250)))
+plot(profitM ~ popularity, data=temp)
+cor(temp$profitM,temp$popularity)
+```
+
+
+# GENRE PROFITABILITY
+
+
+## Profitability of genres
+Action, Adventure, Comedy, and Drama top the list.
+```{r}
+ggplot(data=metascrubdf, aes(x = reorder(maingenre, -profitM), y = profitM)) +   geom_col(aes(fill=maingenre)) +
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Profit by Genre", x = "Genre", y = "Profit")
+
+```
+
+## genre profitability list
+
+```{r}
+genprof <- aggregate(profitM ~ maingenre,metascrubdf,sum)
+genprof
+#plot(genprof$profitM,genprof$maingenre)
+```
+
+
+# PROFIT VS BUDGET
+
+
+## boxplots for profit quantiles without top 3 outliers
+Profit and profit variability increase with budget
+The top 10% budgeted movies have the most profit but also the most varibility
+```{r}
+dta <- subset(metascrubdf,profitM<1500)
+budget.break <- ntile(dta$budgetM,10)
+boxplot((profitM ~ budget.break),data = dta)
+
+# GGplot way
+ggplot(dta, aes(as.factor(budget.break), profitM)) +
+  geom_boxplot(varwidth=T, fill="plum") + 
+  labs(title = "Boxplot of Profit ~ Budget", x = "Budget", y = "Profit")
+```
+
+
+
+# RUNTIME INFORMATION
+
+## runtime information
+mean of 111 minutes with many outliers above the upper quartile
+```{r}
+boxplot(metascrubdf$runtime)
+hist(metascrubdf$runtime)
+mean(metascrubdf$runtime)
+```
+
+
+
+# which genres of movies are most popular
+Popularity corresponds with profit above
+
+```{r}
+ggplot(data=metascrubdf, aes(x=maingenre, y=popularity/length(popularity))) + geom_col(aes(fill=maingenre)) + theme(axis.text.x=element_text(angle=55, hjust=1)) + 
+  labs(title = "Popularity by Genre", x = "Genre", y = "Popularity")
+```
+
+
+## top 10 profitable collections
+```{r eval=FALSE, include=FALSE}
+coll2 <- metascrubdf %>% group_by(Collection)%>% summarize(profit = sum(profitM))
+coll2 <- as.data.frame(coll2)
+coll <- coll2[with(coll2,order(-coll2$profit)),] %>% filter(coll$profit<10000)
+head(coll,10)
+```
+
+```{r eval=FALSE, include=FALSE}
+scatter.smooth(coll$profit)
+```
+
+
+
+
+```{r}
+
+
+rev_by_year <- select(movies %>% filter(revenue > 0), year, revenue) %>% group_by(year) %>% summarise(Mean = mean(revenue, na.rm = TRUE))
+head(rev_by_year, 101)
+
+ggplot(rev_by_year, aes(year, Mean)) + 
+  geom_bar(stat="identity", width = 0.5, fill = "tomato2") + 
+  labs(title = "Average Revenue per Year", x = "Year", y = "Average Revenue") + 
+  theme_classic()
+
+```
+
+
+
