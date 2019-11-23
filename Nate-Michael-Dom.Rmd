@@ -10,12 +10,11 @@ Load packages:
 ```{r}
 setwd("/Users/dominicventura/Data Munging/Movies")
 
-install.packages("gt")
+#install.packages("lubridate")
 library(readr)
 library(tidyverse)
 library(lubridate)
 library(jsonlite)
-library(gt)
 library(data.table)
 ```
 
@@ -23,10 +22,10 @@ library(data.table)
 Read data:
 ```{r}
 movies <- read_csv("movies_metadata.csv")
-credits <- read_csv("credits.csv")
+credits <- read.csv("credits.csv", stringsAsFactors = FALSE)
 keywords <- read_csv("keywords.csv")
 links <- read_csv("links.csv")
-ratings <- read_csv("ratings.csv")
+#ratings <- read_csv("ratings.csv")
 ```
 
 
@@ -53,6 +52,7 @@ ggplot(movies_byYear, aes(`year(release_date)`, n)) + geom_bar(stat="identity", 
 # set movies with budget 0 to NA
 movies$budget[movies$budget == 0] <- NA 
 summary(movies$budget)
+
 ```
 
 
@@ -98,16 +98,18 @@ keywordsDS <- data.frame(keywords)
 # Create the corpus of data
 keywordsDS.corpus <- Corpus(VectorSource(keywordsDS$keywords))
 
-# Cleaning dat. This includes removing stopwords, numbers, whitespace, etc. and converting the corpus into a plain text document.
+# Cleaning data. This includes removing stopwords, numbers, whitespace, etc. and converting the corpus into a plain text document.
 
-keywordsDS.Clean <-tm_map(keywordsDS.corpus, PlainTextDocument)
-keywordsDS.Clean<-tm_map(keywordsDS.corpus,tolower)
-keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeNumbers)
-keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeWords, stopwords("english"))
-keywordsDS.Clean <-tm_map(keywordsDS.Clean,removeWords, c("name"))
-keywordsDS.Clean <-tm_map(keywordsDS.Clean,removePunctuation)
-keywordsDS.Clean <-tm_map(keywordsDS.Clean,stripWhitespace)
-keywordsDS.Clean <-tm_map(keywordsDS.Clean,stemDocument)
+keywordsDS.Clean <- tm_map(keywordsDS.corpus, PlainTextDocument)
+keywordsDS.Clean <- tm_map(keywordsDS.corpus, tolower)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeNumbers)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, stopwords("english"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, c("name"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, c("film"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, c("director"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removePunctuation)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, stripWhitespace)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, stemDocument)
 
 wordcloud(words = keywordsDS.Clean, min.freq = 1,
           max.words=100, random.order=FALSE, rot.per=0.35, 
@@ -118,24 +120,532 @@ dtm <- TermDocumentMatrix(keywordsDS.Clean)
 m <- as.matrix(dtm)
 v <- sort(rowSums(m),decreasing=TRUE)
 d <- data.frame(word = names(v),freq=v)
-head(d, 10)
-
-# Analyze the association between frequent terms (i.e., terms which correlate)
-findAssocs(dtm, terms = "love", corlimit = 0.3)
-findAssocs(dtm, terms = "music", corlimit = 0.3)
-findAssocs(dtm, terms = "war", corlimit = 0.3)
-findAssocs(dtm, terms = "world", corlimit = 0.3)
+head(d, 20)
 
 # The frequency of the first 10 frequent words plotted
 barplot(d[1:20,]$freq, 
         las = 2, 
         names.arg = d[1:20,]$word,
         col ="lightyellow", 
-        main ="Most frequent words",
-        ylab = "Word frequencies")
+        main ="Most Frequent Words",
+        ylab = "Word Frequencies")
+
+# Analyze the association between frequent terms (i.e., terms which correlate)
+findAssocs(dtm, terms = "love", corlimit = 0.3)
+findAssocs(dtm, terms = "music", corlimit = 0.3)
+findAssocs(dtm, terms = "war", corlimit = 0.3)
+findAssocs(dtm, terms = "novel", corlimit = 0.3)
+
+```
+
+```{r}
+require(stats)
+
+pop.title <- data.frame(movies$popularity, movies$title)
+ordered.by.pop <- pop.title[order(-pop.title$movies.popularity),]
+head(ordered.by.pop, 10)
+
+budge.rev <- (data.frame(movies$title, movies$revenue, movies$budget))
+head(budge.rev, 10)
+
+# find which movies made/lost most money and if difference btwn two is same as budget, we remove it.
+
+n <- nrow(budge.rev)
+names(budge.rev) <-  c("Title", "Revenue", "Budget")
+
+diff <- data.frame(matrix(0, nrow = n, ncol=1))
+
+# For loop to take difference of budget and revenue
+                   
+for (i in 1:n) {
+  gross <- budge.rev[i, 2] - budge.rev[i, 3]
+  diff[i,1] <- gross
+
+}
+
+# Binding new gross column to data frame
+new.budge.rev <- cbind(budge.rev, diff)
+names(new.budge.rev) <- c("Title", "Revenue", "Budget", "Gross Revenue")
+
+
+# Filtering out movies with 0's, or equal to budget/revenue
+better.budge.rev <- filter(new.budge.rev, new.budge.rev$matrix.0..nrow...n..ncol...1. != new.budge.rev$Revenue & new.budge.rev$matrix.0..nrow...n..ncol...1. != -new.budge.rev$Budget)
+
+
+# Ordered by highest grossing
+ordered.by.gross <- better.budge.rev[order(-better.budge.rev$matrix.0..nrow...n..ncol...1.),]
+
+names(ordered.by.gross) <- c("Title", "Revenue", "Budget", "Gross")
 
 
 
+
+```
+
+
+
+
+```{r}
+# Plot (histogram, density, box/violin) runtime and average votes to see whether liked shorter movies or longer movies (distribution?)
+
+# Did runtime affect how watchers enjoyed movie?
+library(ggplot2)
+library(data.table)
+
+ggplot(movies, aes(vote_average, runtime, color=vote_average)) + geom_point()
+
+ggplot(movies, aes(popularity, vote_count, color=popularity)) + geom_point()
+
+filter(movies, runtime > 1200)
+
+
+```
+
+```{r}
+# Plot (histogram, density, box/violin)  votes next to gross revenue (distribution?)
+```
+
+```{r}
+# Plot (histogram, density, box/violin) runtime next to gross revenue (distribution?)
+``` 
+
+
+## original metadata with some dictionary form columns
+```{r}
+metadata <- read_csv("the-movies-dataset/movies_metadata.csv")
+
+
+```
+
+## show proportion of missing values in each column
+```{r}
+na.prop2 <- apply(metadata,2,function(x) sum(is.na(x)/length(x)))
+signif(na.prop2,4)
+```
+
+# revenue over 100M over time
+
+```{r}
+nona <- metadata %>% filter(metadata$revenue>100000000) 
+plot(nona$revenue ~ nona$release_date)
+#plot(metadata$revenue ~ metadata$release_date)
+```
+
+
+
+
+# SCRUBBED DATA CONTAINING $ INFORMATION
+
+
+# Using a scrubbed version of the metadata with nonzero $ info,converting to dataframe, and attaching
+```{r}
+metascrub <- read_csv("/Users/dominicventura/Documents/Movies/MetaScrubbedMoney.csv")
+metascrubdf <- as.data.frame(metascrub)
+attach(metascrubdf)
+```
+
+
+# CHECKING DATA STRUCTURE
+
+## Viewing head structure of dataframe
+```{r}
+head(metascrubdf)
+```
+
+## summary information
+```{r}
+summary(metascrubdf)
+```
+
+## show proportion of missing values in each column
+```{r}
+na.prop <- apply(metascrubdf,2,function(x) sum(is.na(x)/length(x)))
+na.prop
+```
+
+
+# MONETARY ANALYSIS
+
+
+## Average budget, revenue, and profit
+```{r}
+sapply(metascrubdf[,c(4,5,6)],mean)
+```
+
+
+
+
+## correlations
+```{r}
+cor(metascrubdf[,c(3:6,8)])
+```
+
+
+# REVENUE VS BUDGET
+
+
+## revenue vs. budget
+Correlation is .721892
+```{r}
+plot(revenueM ~ budgetM, data=metascrubdf)
+cor(revenueM,budgetM)
+
+```
+
+# 2 main outliers
+```{r}
+maxb <- which.max((budgetM))
+metascrubdf[maxb,c(1,4,5)]
+```
+
+```{r}
+maxp <- which.max(profitM)
+metascrubdf[maxp,c(1,4,5)]
+```
+
+Outliers:
+  budget: Pirates of the Caribbean: On Stranger Tides
+  revenue: Avatar
+
+
+# Linear model for revenue vs. budget
+revenue = -3.34 + 3.02 (budget)
+Need to spend money to make money
+```{r}
+mdl <- (lm(revenueM ~ budgetM, data=metascrubdf))
+coef(mdl)
+```
+
+
+# PROFIT VS POPULARITY
+
+
+# profit vs popularity
+Correlation is .4274831
+Popularity is not highly correlated with profit
+```{r}
+plot(profitM ~ popularity, data=metascrubdf)
+cor(profitM,popularity)
+```
+Outliers:
+  popularity: Minions
+  profit: Avatar
+  
+  
+
+## Removing the top 6 outliers for profit vs popularity
+Slightly lower correlation.
+For the handful of highly popular movies between 100 and 250 poupularity, profit decreases with popularity.
+```{r}
+temp <- subset(metascrubdf, ((profitM<1500) & (popularity<250)))
+plot(profitM ~ popularity, data=temp)
+cor(temp$profitM,temp$popularity)
+```
+
+
+# GENRE PROFITABILITY
+
+
+## Profitability of genres
+Action, Adventure, Comedy, and Drama top the list.
+```{r}
+ggplot(data=metascrubdf, aes(x=maingenre, y=profitM)) + geom_col(aes(fill=maingenre))
+library(ggplot2)
+
+str(metascrubdf)
+
+ggplot(data=metascrubdf, aes(x = maingenre, y = profitM)) + geom_col(aes(fill=maingenre)) +
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Profit by Genre", x = "Genre", y = "Profit")
+
+#metascrubdf$maingenre <- factor(metascrubdf$maingenre, levels = c("Action", "Adventure", "Animation", "Comedy", "Crime", "Documentary", "Drama", "Family", "Fantasy", "Foreign", "History", "Horror", "Music", "Mystery", "Romance", "Science Fiction", "Thriller", "TV Movie", "War", "Western", "NA"))
+
+metascrubdf$maingenre <- as.factor(metascrubdf$maingenre)
+
+ggplot(data=metascrubdf, aes(x = reorder(maingenre, profitM), y = profitM)) +   geom_col(aes(fill=maingenre)) +
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Profit by Genre", x = "Genre", y = "Profit")
+```
+
+## genre profitability list
+
+```{r}
+genprof <- aggregate(profitM ~ maingenre,metascrubdf,sum)
+genprof
+#plot(genprof$profitM,genprof$maingenre)
+```
+
+
+# PROFIT VS BUDGET
+
+
+## boxplots for profit quantiles without top 3 outliers
+Profit and profit variability increase with budget
+The top 10% budgeted movies have the most profit but also the most varibility
+```{r}
+dta <- subset(metascrubdf,profitM<1500)
+budget.break <- ntile(dta$budgetM,10)
+boxplot((profitM ~ budget.break),data = dta)
+
+```
+
+
+
+# RUNTIME INFORMATION
+
+## runtime information
+mean of 111 minutes with many outliers above the upper quartile
+```{r}
+boxplot(runtime)
+hist(runtime)
+mean(runtime)
+```
+
+
+
+# which genres of movies are most popular
+Popularity corresponds with profit above
+
+```{r}
+ggplot(data=metascrubdf, aes(x=maingenre, y=popularity/length(popularity))) + geom_col(aes(fill=maingenre))
+```
+
+
+## top 10 profitable collections
+```{r}
+coll2 <- metascrubdf %>% group_by(Collection)%>% summarize(profit = sum(profitM))
+coll2 <- as.data.frame(coll2)
+coll <- coll2[with(coll2,order(-coll2$profit)),] %>% filter(coll$profit<10000)
+head(coll,10)
+```
+
+```{r}
+install.packages("plyr")
+library(plyr)
+
+
+production <- read_csv("/Users/dominicventura/Documents/Movies/Production.csv")
+production <- data.frame(production)
+
+
+comps <- aggregate(revenue ~ production_companies, data=production, FUN=sum) %>% 
+  filter(revenue > 10000000000)
+
+comps[order(-comps$revenue),]
+
+ggplot(data=comps, aes(x = reorder(production_companies, -revenue), y = revenue)) + geom_col(aes(fill=production_companies)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Production Companies by Revenue", x = "Production Companies", y = "Revenue")
+
+
+comps.budget <- aggregate(budget ~ production_companies, data=production, FUN=sum) %>%
+  filter(budget > 2000000000)
+
+ggplot(data=comps.budget, aes(x = reorder(production_companies, -budget), y = budget)) + geom_col(aes(fill=production_companies)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Production Companies by Money Spent", x = "Production Companies", y = "Money Spent")
+
+```
+
+```{r}
+
+
+#num.of.movies <- sort(table(production$production_companies), decreasing = TRUE) 
+#head(num.of.movies, 10)
+
+
+
+
+#str_split(movies$production_companies, ",", 4, simplify = TRUE)
+
+
+cast_text <- credits$cast
+parse_cast <- function(cast_text) {
+  text <- 
+    sub("\\£\\$\\£", "",    #drop the first one
+        gsub("\'|\"|\\[|\\]|\\{|\\}|,", "",
+             gsub("\'cast_id\':|\'character\':|\'credit_id\':|\'gender\':|\'id\':|\'name\':|\'order\':|\'profile_path\':", 
+                  "£$£", 
+                  cast_text)
+        )
+    )
+  
+  data <- data.frame(matrix(
+    trimws(unlist(
+        strsplit(text, "\\£\\$\\£")
+        )), 
+    ncol = 8, byrow = TRUE), stringsAsFactors = FALSE)
+  
+  names(data) <- c("cast_id", "character", "credit_id", "gender", "id", "name", "order", "profile_path")
+  data$order <- as.numeric(data$order)
+  
+  return(data %>% select(cast_id, gender, id, name, order))
+}
+
+num_batches <- 50
+batch_interval <- ceiling(nrow(credits) / num_batches)
+batch_brackets <- 0:num_batches * batch_interval
+batch_brackets[num_batches+1] <- nrow(credits)
+batch_brackets[1] <- 1
+
+cast_data <- data.frame()
+for(b_i in 1:num_batches){
+  
+  batch_data <- data.frame()
+  for(b2_i in batch_brackets[b_i]:(batch_brackets[b_i+1]-1)){
+    #print(b2_i)
+    this_cast <- parse_cast(credits$cast[b2_i])
+    if(nrow(this_cast) > 0){
+      this_cast$movie_id <- as.character(credits$id[b2_i])
+      batch_data <- rbind(batch_data, this_cast)
+    }
+  }
+  cast_data <- rbind(cast_data, batch_data)
+  print(paste0("    done batch ", b_i))
+}
+
+
+```
+```{r}
+
+cast_data$gender[cast_data$gender == 0] <- "Unspecified"
+cast_data$gender[cast_data$gender == 1] <- "Female"
+cast_data$gender[cast_data$gender == 2] <- "Male"
+
+ggplot(cast_data, aes(factor(gender), fill=factor(gender))) + 
+  geom_bar()
+
+getwd()
+write.csv(cast_data, file="castData.csv")
+
+castDataCast <- read_csv("/Users/dominicventura/Data Munging/Movies/castData.csv")
+```
+
+```{r}
+cast_text_crew <- credits$crew
+parse_cast <- function(cast_text_crew) {
+  text <- 
+    sub("\\£\\$\\£", "",    #drop the first one
+        gsub("\'|\"|\\[|\\]|\\{|\\}|,", "",
+             gsub("\'credit_id\':|\'department\':|\'gender\':|\'id\':|\'job\':|\'name\':|\'profile_path\':", 
+                  "£$£", 
+                  cast_text_crew)
+        )
+    )
+  
+  data <- data.frame(matrix(
+    trimws(unlist(
+        strsplit(text, "\\£\\$\\£")
+        )), 
+    ncol = 7, byrow = TRUE), stringsAsFactors = FALSE)
+  
+  names(data) <- c("credit_id", "department", "gender", "id", "job", "name", "profile_path")
+  #data$order <- as.numeric(data$order)
+  
+  return(data %>% select(name, gender, id, job))
+}
+
+num_batches <- 50
+batch_interval <- ceiling(nrow(credits) / num_batches)
+batch_brackets <- 0:num_batches * batch_interval
+batch_brackets[num_batches+1] <- nrow(credits)
+batch_brackets[1] <- 1
+
+cast_data <- data.frame()
+for(b_i in 1:num_batches){
+  
+  batch_data <- data.frame()
+  for(b2_i in batch_brackets[b_i]:(batch_brackets[b_i+1]-1)){
+    #print(b2_i)
+    this_cast <- parse_cast(credits$crew[b2_i])
+    if(nrow(this_cast) > 0){
+      this_cast$movie_id <- as.character(credits$id[b2_i])
+      batch_data <- rbind(batch_data, this_cast)
+    }
+  }
+  cast_data <- rbind(cast_data, batch_data)
+  print(paste0("    done batch ", b_i))
+}
+
+```
+
+
+
+```{r}
+# cast_data_crew <- read_csv("/Users/dominicventura/Data Munging/Movies/castDataCrew.csv")
+
+cast_data_crew$gender[cast_data$gender == 0] <- "Unspecified"
+cast_data_crew$gender[cast_data$gender == 1] <- "Female"
+cast_data_crew$gender[cast_data$gender == 2] <- "Male"
+
+#write.csv(cast_data, file="castDataCrew.csv")
+
+directors <- cast_data_crew %>%
+  filter(job == "Director")
+
+ggplot(directors, aes(factor(gender), fill=factor(gender))) + geom_bar() + labs(title = "Directors by Gender", x = "Gender", y = "Count")
+
+#unique(cast_data$job)
+
+screenplay <- cast_data_crew %>%
+  filter(job == "Screenplay")
+
+ggplot(screenplay, aes(factor(gender), fill=factor(gender))) + geom_bar() + labs(title = "Screenplay Writers by Gender", x = "Gender", y = "Count")
+
+
+producer <- cast_data_crew %>%
+  filter(job == "Producer")
+
+ggplot(producer, aes(factor(gender), fill=factor(gender))) + geom_bar() + labs(title = "Producers by Gender", x = "Gender", y = "Count")
+
+EP <- cast_data_crew %>%
+  filter(job == "Executive Producer")
+
+ggplot(EP, aes(factor(gender), fill=factor(gender))) + geom_bar() + labs(title = "EPs by Gender", x = "Gender", y = "Count")
+
+editor <- cast_data_crew %>%
+  filter(job == "Editor")
+
+ggplot(editor, aes(factor(gender), fill=factor(gender))) + geom_bar() + labs(title = "Editors by Gender", x = "Gender", y = "Count")
+
+
+```
+
+```{r}
+order01 <- castDataCast %>%
+  filter(order == 0 | order == 1)
+
+  
+topBilling <- order01 %>%
+  distinct() %>%
+  count(name)
+
+names(topBilling) <- c("Name", "Count")
+
+topBilling <- topBilling[order(-topBilling$Count),]
+topBilling
+  
+topBilling10 <- head(topBilling[order(-topBilling$n),], 10)
+
+
+ggplot(data=topBilling10, aes(x = reorder(name, -n), y = n)) + geom_col(aes(fill=name)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Top Billing by Actor", x = "Actor", y = "Count")
+
+
+
+```
+
+```{r}
+billingGender <- order01 %>%
+  filter(order == 0 | order == 1) %>%
+  count(gender)
+
+billingGender
+
+ggplot(data=billingGender, aes(x = reorder(gender, -n), y = n)) + geom_col(aes(fill=gender)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Top Billing by Gender", x = "Gender", y = "Count")
 ```
 
 
