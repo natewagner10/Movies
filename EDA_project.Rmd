@@ -1,0 +1,624 @@
+---
+title: "Movies Dataset"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# Exploratory Data Analysis Project
+#### By Michael Bohn, Nate Wagner, Dominic Ventura
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+#setwd("/Users/natewagner/Documents/Data_munging_eda_project")
+```
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(jsonlite)
+library(data.table)
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(knitr)
+library(gridExtra)
+library(ggforce)
+library(SnowballC)
+library(plotly)
+#install.packages("gt")
+#install.packages("tm")
+#install.packages("wordcloud")
+#install.packages("RColorBrewer")
+```
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+movies <- read_csv("movies_metadata.csv")
+movies.orig <- read_csv("movies_metadata.csv")
+credits <- read_csv("credits.csv")
+keywords <- read_csv("keywords.csv")
+links <- read_csv("links.csv")
+ratings <- read_csv("ratings.csv")
+cast_data <- read_csv("castData.csv")
+cast_data1 <- read_csv("castDataCrew.csv")
+production <- read_csv("Production.csv")
+metascrub <- read_csv("MetaScrubbedMoney.csv")
+metascrubdf <- as.data.frame(metascrub)
+```
+
+
+### Completeness
+
+Most of our variables of interest were complete.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# get average rating for other users
+avg_ratings <- select(ratings, movieId, rating)  %>% group_by(movieId) %>% summarise_at(vars(rating), list(rating = mean))
+names(avg_ratings) <- c("id", "avg_rating")
+
+# join tables:
+names(links) <- c("id", "imdbid", "tmdbid")
+movies.merged <- merge(x = links, y = avg_ratings, by = "id")
+movies.merged1 <- merge(x = movies, y = select(movies.merged, tmdbid, avg_rating), by.x = "id", by.y = "tmdbid")
+movies <- movies.merged1
+
+
+sum.NA.total <- movies %>%
+  select(everything()) %>%
+  summarise_all(funs(sum(is.na(.))))
+
+PropOfNA.total <- (sum.NA.total/nrow(movies))*100
+SumNA.prop <- PropOfNA.total %>% map_dbl(sum)
+kable(SumNA.prop, format = "markdown")
+
+```
+
+
+### Exploratory Data Analysis
+
+We have data on movies from 1874 to 2020. The number of movies per year clearly increases over time. 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Year Summary
+sum_year <- as.data.frame(as.array(summary(year(movies$release_date))))
+names(sum_year) <- c("Statistic", "Value")
+kable(sum_year, type = "Markdown")
+
+# freq table for # movies per year:
+movies_byYear <- movies %>% 
+  group_by(year(release_date)) %>% 
+  count()
+
+# barplot of # movies per year:
+ggplot(movies_byYear, aes(`year(release_date)`, n)) + 
+  geom_bar(stat="identity", width = 0.5, fill = "tomato2") + 
+  labs(title = "Number of Movies per Year", x = "Year", y = "Number of Movies") + 
+  theme_classic()
+
+```
+
+
+### What affects movie ratings?
+
+
+We have two populations of user's movie ratings. With the "avg_rating" in movies corresponding to ratings of MovieLens users, and "vote_average" corresponding to TMDb users.
+There are a couple extreme outliers with average ratings of 0 and vote counts greater than 30. For simplicity and to get a better representation of our scatterplots we are going to exclude these two points. 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# TMDb users
+sum_vote <- as.data.frame(as.array(summary(movies$vote_average)))
+names(sum_vote) <- c("Vote Average for TMDb Users", "Value")
+kable(sum_vote, type = "Markdown")
+
+# IMDb users
+sum_vote2 <- as.data.frame(as.array(summary(movies$avg_rating)))
+names(sum_vote2) <- c("Vote Average for MovieLens Users", "Value")
+kable(sum_vote2, type = "Markdown")
+
+# vote count TMDb users
+sum_vote3 <- as.data.frame(as.array(summary(movies$vote_count)))
+names(sum_vote3) <- c("Vote Count", "Value")
+kable(sum_vote3, type = "Markdown")
+
+
+#movies %>% filter(vote_average < .50 & vote_count > 20) %>%
+#  select(title, vote_average, vote_count)
+
+movies <- movies %>%
+  filter(vote_average > 0.50)
+```
+
+
+Correlation Matrix
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# select numeric columns & add year column:
+movies <- mutate(movies, year = year(movies$release_date))
+metascrubdf <- mutate(metascrubdf, year = year(as.Date(metascrubdf$release_date)))
+
+num.cols <- dplyr::select_if(movies, is.numeric)
+
+# compute cor from all numeric columns:
+cor.matrix <- round(cor(num.cols, use = "pairwise"), 2)
+
+# melt the cor matrix:
+cor.matrix.melt <- melt(cor.matrix)
+```
+
+
+Looking at the correlation matrix, there doesn't seem to be any real strong linear relationships between any of these variables and average movie ratings. But perhaps there are some non-linear relationships. 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# plot cor matrix
+ggplot(data = cor.matrix.melt, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + theme(axis.text.x = element_text(angle=65, vjust=0.6))
+
+kable(cor.matrix, format = "markdown")
+```
+
+
+Density plots for popularity, vote count, runtime and average vote.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+one <- ggplot(movies %>% filter(popularity < 20), aes(popularity)) + geom_density(fill="gray30", alpha=0.4, adjust=0.05) + theme_bw()
+
+two <- ggplot(movies %>% filter(vote_count < 100 & vote_count > 0), aes(vote_count)) + geom_density(fill="gray30", alpha=0.4, adjust=0.4) + theme_bw()
+
+three <- ggplot(movies %>% filter(runtime < 140 & runtime > 0), aes(runtime)) + geom_density(fill="gray30", alpha = 0.4, adjust = 0.3) + theme_bw()
+
+four <- ggplot(movies, aes(vote_average)) + geom_density(fill="gray30", alpha=0.4, adjust = 0.35) + theme_bw()
+
+grid.arrange(one, two, three, four, nrow = 2)
+```
+
+
+
+We are going to assume that to have an unbiased estimate of a movie's true average rating, there must be at least 30 votes, and we find 12,439 movies that meet this criteria. However, a potential source of bias with this approach is that it could be that movies with very low vote totals, are not very good movies to begin with and aren't popular. Thus, that could be why they have low vote counts and possible low average ratings.  
+```{r message=FALSE, warning=FALSE, include=FALSE}
+movies %>% 
+  filter(vote_count >= 30) %>%
+  count()
+```
+
+
+### Are low vote counts associated with lower average ratings?
+
+It could be hard to see the actual trend with the extreme values of vote count.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(movies %>% filter(vote_count > 0), aes(vote_count, vote_average)) +
+  geom_point(alpha = 0.05) + 
+  geom_smooth() + 
+  labs(title = "Vote Count vs Vote Average", x = "Vote Count", y = "Vote Average") +
+  theme_bw()
+```
+
+
+Even with removing the extreme values of vote count, it's still hard to see much of a releationship between vote count and vote average. 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(movies %>% filter(vote_count > 0 & vote_count < 31), aes(vote_count, vote_average)) +
+  geom_point(alpha = 0.05) +
+  geom_smooth() +
+  labs(title = "Vote Count vs Vote Average", subtitle = "n < 31", x = "Vote Count", y = "Vote Average") +
+  theme_bw()
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Remove movies with vote count less than 30
+movies <- movies %>% filter(vote_count >= 30)
+```
+
+
+### How has average vote changed over time?
+
+It seems there is a slight negative relationship between average vote and when the movie was released. 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+p1 <- ggplot(movies, aes(year, vote_average)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth() +
+  labs(title = "Release Date vs Vote Average", subtitle = "TMDb Users",x = "Year", y = "Vote Average") + 
+  theme_bw()
+
+p2 <- ggplot(movies, aes(year, avg_rating)) +
+  geom_point(alpha = 0.1) +
+  geom_smooth() +
+  labs(title = "Release Date vs Vote Average", subtitle = "MovieLens Users",x = "Year", y = "Vote Average") + 
+  theme_bw()
+
+grid.arrange(p1, p2, nrow = 1, ncol = 2)
+```
+
+
+### How does the runtime of movie affect average votes?
+
+There are 69 movies with runtime equal to zero.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+sum_runtime <- as.data.frame(as.array(summary(movies$runtime)))
+names(sum_runtime) <- c("Runtime", "Value")
+kable(sum_runtime, type = "Markdown")
+
+movies %>%
+  filter(runtime == 0) %>%
+  count()
+```
+
+Hard to see association with the extreme values of runtime. However, even with the removal of outliers it's still hard to see much of an association between runtime and average movie rating.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+lower <- quantile(movies$runtime, 0.25, na.rm = TRUE) - 1.5 * IQR(movies$runtime, na.rm =T)
+upper <- quantile(movies$runtime, 0.75, na.rm = TRUE) + 1.5 * IQR(movies$runtime, na.rm =T)
+
+P1.1 <- ggplot(movies %>% filter(runtime > 0), aes(runtime, vote_average)) +
+          geom_point(alpha = 0.1) +
+          facet_zoom(x = runtime >= lower & runtime <= upper & runtime > 0) +
+          geom_smooth() +
+          theme_bw() +
+          labs(title = "Runtime vs Vote Average", subtitle = "TMDb Users",x = "Runtime", y = "Vote Average")
+
+P1.2 <- ggplot(movies %>% filter(runtime > 0), aes(runtime, avg_rating)) +
+          geom_point(alpha = 0.1) +
+          facet_zoom(x = runtime >= lower & runtime <= upper & runtime > 0) +
+          geom_smooth() +
+          theme_bw() +
+          labs(title = "Runtime vs Vote Average", subtitle = "MovieLens Users",x = "Runtime", y = "Vote Average")
+
+grid.arrange(P1.1, P1.2, nrow = 1, ncol = 2)
+```
+
+
+
+### Does average votes increase with popularity? 
+
+Not sure how popularity is measured.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+sum_popularity <- as.data.frame(as.array(summary(movies$popularity)))
+names(sum_popularity) <- c("Popularity", "Value")
+kable(sum_popularity, type = "Markdown")
+```
+
+Even with the removal of extreme outliers, there seems to be no relationship between movie popularity and average movie rating.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+lower <- quantile(movies$popularity, 0.25, na.rm = TRUE) - 1.5 * IQR(movies$popularity, na.rm =T)
+upper <- quantile(movies$popularity, 0.75, na.rm = TRUE) + 1.5 * IQR(movies$popularity, na.rm =T)
+
+P1.3 <- ggplot(movies %>% filter(popularity > 0), aes(popularity, vote_average)) +
+          geom_point(alpha = 0.1) +
+          facet_zoom(x = popularity >= lower & popularity < upper & popularity > 0) +
+          geom_smooth() +
+          theme_bw() +
+          labs(title = "Popularity vs Vote Average", subtitle = "TMDb Users",x = "Popularity", y = "Vote Average")
+
+P2.3 <- ggplot(movies %>% filter(popularity > 0), aes(popularity, avg_rating)) +
+          geom_point(alpha = 0.1) +
+          facet_zoom(x = popularity >= lower & popularity < upper & popularity > 0) +
+          geom_smooth() +
+          theme_bw() +
+          labs(title = "Popularity vs Vote Average", subtitle = "MovieLens Users",x = "Popularity", y = "Vote Average")
+
+
+grid.arrange(P1.3, P2.3, nrow = 1, ncol = 2)
+```
+
+
+### Word association in movies: 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Create the corpus of data
+keywordsDS.corpus <- Corpus(VectorSource(keywords$keywords))
+# Cleaning dat. This includes removing stopwords, numbers, whitespace, etc. and converting the corpus into a plain text document.
+keywordsDS.Clean <- tm_map(keywordsDS.corpus, PlainTextDocument)
+keywordsDS.Clean <- tm_map(keywordsDS.corpus, tolower)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeNumbers)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, stopwords("english"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, c("name"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, c("film"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removeWords, c("director"))
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, removePunctuation)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, stripWhitespace)
+keywordsDS.Clean <- tm_map(keywordsDS.Clean, stemDocument)
+wordcloud(words = keywordsDS.Clean, min.freq = 1,
+          max.words=100, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+
+The top three most common words are woman, relationship and independent.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+
+# Build a term-document matrix. Document matrix is a table containing the frequency of the words. Column names are words and row names are documents.
+dtm <- TermDocumentMatrix(keywordsDS.Clean)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+names(d) <- c("Word", "Frequency")
+kable(head(d, 10), type = "Markdown")
+
+
+# Analyze the association between frequent terms (i.e., terms which correlate)
+#findAssocs(dtm, terms = "love", corlimit = 0.3)
+#findAssocs(dtm, terms = "music", corlimit = 0.3)
+#findAssocs(dtm, terms = "war", corlimit = 0.3)
+#findAssocs(dtm, terms = "world", corlimit = 0.3)
+
+
+# barplot of Most Frequent words 
+ggplot(d[1:20,], aes(reorder(Word, -Frequency), Frequency)) +
+  geom_bar(stat="identity", width = 0.5, fill = "navy") +
+  labs(title = "Most frequent words", y = "Word frequencies", x = "Words") + 
+  theme(axis.text.x=element_text(angle=55, hjust=1))
+
+
+```
+
+
+Breakdown of movies by cast gender:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cast_data$gender[cast_data$gender == 0] <- "Unspecified"
+cast_data$gender[cast_data$gender == 1] <- "Female"
+cast_data$gender[cast_data$gender == 2] <- "Male"
+
+ggplot(cast_data, aes(factor(gender), fill=factor(gender))) +
+  geom_bar() +
+  labs(title= "Movies by Gender", x = "Gender", y = "Count") +
+  theme_bw()
+```
+
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+comps <- aggregate(revenue ~ production_companies, data=production, FUN=sum) %>% 
+  filter(revenue > 10000000000)
+
+
+
+ggplot(data=comps, aes(x = reorder(production_companies, -revenue), y = revenue)) + geom_col(aes(fill=production_companies)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Production Companies by Revenue", x = "Production Companies", y = "Revenue")
+
+names(comps) <- c("Production Companies", "Revenue")
+kable(comps[order(-comps$Revenue),], type = "Markdown")
+
+comps.budget <- aggregate(budget ~ production_companies, data=production, FUN=sum) %>%
+  filter(budget > 2000000000)
+
+ggplot(data=comps.budget, aes(x = reorder(production_companies, -budget), y = budget)) + geom_col(aes(fill=production_companies)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Production Companies by Money Spent", x = "Production Companies", y = "Money Spent")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cast_data1$gender[cast_data1$gender == 0] <- "Unspecified"
+cast_data1$gender[cast_data1$gender == 1] <- "Female"
+cast_data1$gender[cast_data1$gender == 2] <- "Male"
+
+
+cast_data11 <- cast_data1 %>% filter(gender != "Unspecified")
+
+ggplot(cast_data11 %>% filter(job == "Director" | job == "Screenplay" | job == "Producer" | job == "Executive Producer" | job == "Editor"), aes(factor(job))) +
+  geom_bar(aes(fill = gender)) +
+  labs(title = "Gender Distribution by Job", x = "Gender", y = "Count")
+
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+order01 <- cast_data %>%
+  filter(order == 0 | order == 1)
+  
+topBilling <- order01 %>%
+  distinct() %>%
+  count(name)
+
+names(topBilling) <- c("Name", "Count")
+topBilling <- topBilling[order(-topBilling$Count),]
+kable(head(topBilling,10), type = "Markdown")
+  
+topBilling10 <- head(topBilling[order(-topBilling$Count),], 10)
+
+ggplot(data=topBilling10, aes(x = reorder(Name, -Count), y = Count)) +
+  geom_col(aes(fill=Name)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Top Billing by Actor", x = "Actor", y = "Count")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+billingGender <- order01 %>%
+  filter(order == 0 | order == 1) %>%
+  count(gender)
+billingGender
+
+ggplot(data=billingGender, aes(x = reorder(gender, -n), y = n)) + geom_col(aes(fill=gender)) + 
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Top Billing by Gender", x = "Gender", y = "Count")
+```
+
+
+
+
+
+
+### How has revenue changed over time? 
+
+Here we have two different views of the association. 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+PP1 <- ggplot(movies %>% filter(revenue > 100000000), aes(release_date, revenue)) +
+        geom_point(alpha = 0.3) +
+        theme_bw() +
+        geom_smooth() +
+        labs(title = "Revenue vs Release Date", x = "Release Date", y = "Revenue")
+ 
+rev_by_year <- select(movies %>% filter(revenue > 0), year, revenue) %>% group_by(year) %>% summarise(Mean = mean(revenue, na.rm = TRUE))
+
+
+PP2 <- ggplot(rev_by_year, aes(year, Mean)) + 
+        geom_bar(stat="identity", width = 0.5, fill = "tomato2") + 
+        labs(title = "Average Revenue per Year", x = "Release Date", y = "Average Revenue") + 
+        theme_classic()
+
+grid.arrange(PP1, PP2, nrow=1)
+```
+
+
+### Revenue vs Popularity
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+pop.rev <- ggplot(movies %>% filter(revenue > 100000000), aes(popularity, revenue)) + 
+            geom_point(alpha = 0.2) +
+            geom_smooth() +
+            labs(title = "Popularity vs Vote Average", x = "Popularity", y = "Revenue") +
+            theme_bw()
+
+ggplotly(pop.rev)
+```
+
+
+Average budget, revenue, and profit:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+rev <- sapply(metascrubdf[,c(4,5,6)],mean)
+names(rev) <- c("Budget", "Revenue", "Profit")
+kable(rev, type = "Markdown")
+```
+
+Correlations
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cormat <- cor(metascrubdf[,c(3:6,8)])
+kable(cormat, type = "Markdown")
+```
+
+
+### Revenue vs Budget
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(metascrubdf, aes(budgetM, revenueM)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth() +
+  labs(title = "Revenue vs Budget", x = "Budget", y = "Revenue") +
+  theme_bw()
+```
+
+Two main outliers:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+maxb <- which.max((metascrubdf$budgetM))
+kable(metascrubdf[maxb,c(1,4,5)], type = "Markdown")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+maxp <- which.max(metascrubdf$profitM)
+kable(metascrubdf[maxp,c(1,4,5)], type = "Markdown")
+```
+
+  
+
+### Profit vs Popularity
+Correlation is .43
+Popularity is not highly correlated with profit
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+cor(metascrubdf$profitM, metascrubdf$popularity)
+
+plot1 <- ggplot(metascrubdf %>% filter(profitM < 1500 & popularity < 50), aes(popularity, profitM)) +
+  geom_point(alpha = 0.3) + 
+  geom_smooth() +
+  labs(title = "Profit vs Popularity", x = "Popularity", y = "Profit") +
+  theme_bw()
+
+ggplotly(plot1)
+```
+Outliers:
+  popularity: Minions
+  profit: Avatar
+  
+  
+
+### Profitability of genres
+Action, Adventure, Comedy, and Drama top the list.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data=metascrubdf, aes(x = reorder(maingenre, -profitM), y = profitM)) +   geom_col(aes(fill=maingenre)) +
+  theme(axis.text.x=element_text(angle=55, hjust=1)) +
+  labs(title = "Profit by Genre", x = "Genre", y = "Profit")
+
+```
+
+
+### Genre profitability list:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+genprof <- aggregate(profitM ~ maingenre,metascrubdf,sum)
+
+genprof <- genprof %>% arrange(desc(profitM))
+names(genprof) <- c("Main Genre", "Profit")
+kable(genprof, type = "Markdown")
+
+```
+
+
+### Profit vs Budget
+
+Profit and profit variability increase with budget.
+The top 10% budgeted movies have the most profit but also the most varibility.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+dta <- subset(metascrubdf,profitM<1500)
+budget.break <- ntile(dta$budgetM,10)
+
+# ggplot way
+ggplot(dta, aes(as.factor(budget.break), profitM)) +
+  geom_boxplot(varwidth=T, fill="plum") + 
+  labs(title = "Boxplot of Profit ~ Budget", x = "Budget", y = "Profit") + 
+  theme_bw()
+```
+
+
+
+### Runtime Information
+
+Mean of 111 minutes with many outliers above the upper quartile
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(metascrubdf %>% filter(maingenre == "Action" | maingenre == "Adventure" | maingenre == "Comedy" | maingenre == "Drama" | maingenre == "Animation"), aes(x = maingenre, y = runtime)) +
+  geom_boxplot(aes(col = maingenre)) +
+  labs(title = "Runtime by Genre", x = "Main Genre", y = "Runtime", subtitle = "Top 5 most profitable genres") +
+  theme_bw()
+
+mean(metascrubdf$runtime)
+
+```
+
+
+
+### Genre and Popularity
+Popularity corresponds with profit above
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(data=metascrubdf, aes(x=maingenre, y=popularity/length(popularity))) + geom_col(aes(fill=maingenre)) + theme(axis.text.x=element_text(angle=55, hjust=1)) + 
+  labs(title = "Popularity by Genre", x = "Genre", y = "Popularity")
+```
+
+
+Here are the top ten most profitable collections:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+coll2 <- metascrubdf %>% group_by(Collection)%>% summarize(profit = sum(profitM))
+coll2 <- as.data.frame(coll2)
+coll <- coll2[with(coll2,order(-coll2$profit)),]
+coll <- filter(coll, coll$profit<10000)
+kable(head(coll,10), type = "Markdown")
+```
+
+
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+cast_data1 <- cast_data %>% filter(gender != "Unspecified")
+pct_male <- select(cast_data1, gender, id)  %>% group_by(movie_id) %>% summarise_at(vars(gender), list(rating = count(gender == "Male")/nrow(movie_id)))
+
+(cast_data1 %>% filter(movie_id == 862 & gender == "Male") %>% count())  / (nrow(cast_data1 %>% filter(movie_id == 862)) )
+
+group_by(df, group) %>% mutate(percent = value/sum(value))
+
+test <-select(cast_data1, movie_id, gender) %>% group_by(movie_id) %>%
+  mutate(pct_male = ((sum(gender == "Male"))/(sum(gender == "Male" | gender == "Female"))))
+
+pctMale <- unique(test)
+
+movies.pctMale <- merge(x = movies.orig, y = pctMale, by.x = "id", by.y = "movie_id")
+
+
+ggplot(movies.pctMale %>% filter(vote_count > 29), aes(pct_male, vote_average)) + geom_point(alpha = 0.3) + geom_smooth()
+
+```
